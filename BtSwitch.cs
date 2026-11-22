@@ -197,6 +197,7 @@ namespace BtSwitch
         string lastSignature = "";
         string favorite;
         bool quitting;
+        DateTime holdUntil = DateTime.MinValue; // evite que le rafraichissement remette le switch en place pendant la bascule
 
         static readonly Color Bg = Color.FromArgb(24, 24, 28), Card = Color.FromArgb(38, 38, 46),
             Fg = Color.FromArgb(235, 235, 240), Muted = Color.FromArgb(150, 150, 165),
@@ -233,7 +234,7 @@ namespace BtSwitch
             tray.ContextMenuStrip = new ContextMenuStrip();
             tray.ContextMenuStrip.Opening += (s, e) => BuildTrayMenu();
 
-            timer.Interval = 2000; timer.Tick += (s, e) => Refresh_();
+            timer.Interval = 2000; timer.Tick += (s, e) => { if (DateTime.Now >= holdUntil) Refresh_(); };
             timer.Start();
             favorite = ReadSetting("Favorite");
             Refresh_();
@@ -266,7 +267,7 @@ namespace BtSwitch
 
         void Refresh_()
         {
-            try { devices = BtAudio.List(); }
+            try { devices = Sorted(BtAudio.List()); }
             catch (Exception ex) { status.Text = "Erreur de lecture : " + ex.Message; return; }
             string sig = "";
             foreach (var d in devices) sig += d.Name + (d.Connected ? "1" : "0") + "|";
@@ -287,33 +288,68 @@ namespace BtSwitch
                 list.Controls.Add(new Label { AutoSize = false, Width = 340, Height = 80, ForeColor = Muted,
                     Text = "Aucun appareil audio Bluetooth appairé.\nAppaire d'abord tes écouteurs dans\nParamètres > Bluetooth et appareils." });
             }
-            foreach (var d in devices) list.Controls.Add(MakeRow(d));
+            for (int i = 0; i < devices.Count; i++) list.Controls.Add(MakeRow(devices[i], i));
             list.ResumeLayout();
         }
 
-        Control MakeRow(BtDevice d)
+        Control MakeRow(BtDevice d, int index)
         {
             var row = new Panel { Width = 340, Height = 64, BackColor = Card, Margin = new Padding(0, 4, 0, 4) };
+
+            var up = new ArrowButton(true) { BackColor = Card, Enabled = index > 0 };
+            up.SetBounds(6, 9, 22, 22); up.AccessibleName = "Monter " + d.Name;
+            up.Click += (s, e) => MoveDevice(index, -1);
+            var down = new ArrowButton(false) { BackColor = Card, Enabled = index < devices.Count - 1 };
+            down.SetBounds(6, 33, 22, 22); down.AccessibleName = "Descendre " + d.Name;
+            down.Click += (s, e) => MoveDevice(index, +1);
+
             var name = new Label { Text = d.Name, AutoEllipsis = true, Font = new Font("Segoe UI Semibold", 10f) };
-            name.SetBounds(12, 10, 200, 22);
-            var where = new Label { Text = d.Connected ? "Son sur le PC" : "Libre → son sur le téléphone",
+            name.SetBounds(34, 11, 174, 22);
+            var where = new Label { Text = d.Connected ? "Son sur le PC" : "Libre pour le téléphone",
                 ForeColor = d.Connected ? PcColor : PhoneColor, Font = new Font("Segoe UI", 8.5f) };
-            where.SetBounds(12, 34, 200, 20);
-            var btn = new Button { FlatStyle = FlatStyle.Flat, ForeColor = Color.White, Cursor = Cursors.Hand,
-                Text = d.Connected ? "Vers le tél." : "Vers le PC",
-                BackColor = d.Connected ? PhoneColor : PcColor, Font = new Font("Segoe UI Semibold", 9f) };
-            btn.FlatAppearance.BorderSize = 0;
-            btn.SetBounds(218, 14, 110, 36);
-            btn.AccessibleName = d.Connected ? "Envoyer le son de " + d.Name + " vers le téléphone" : "Ramener le son de " + d.Name + " sur le PC";
-            btn.Click += (s, e) => Toggle(d);
-            row.Controls.Add(name); row.Controls.Add(where); row.Controls.Add(btn);
+            where.SetBounds(34, 34, 174, 20);
+
+            var sw = new ToggleSwitch(!d.Connected, PcColor, PhoneColor, Muted) { BackColor = Card };
+            sw.SetBounds(212, 15, 118, 34);
+            sw.AccessibleName = "Son de " + d.Name + " : " + (d.Connected ? "PC" : "téléphone");
+            sw.Toggled += (s, e) => Toggle(d);
+
+            row.Controls.Add(up); row.Controls.Add(down);
+            row.Controls.Add(name); row.Controls.Add(where); row.Controls.Add(sw);
             return row;
+        }
+
+        // ----- ordre personnalise -----
+        List<BtDevice> Sorted(List<BtDevice> list)
+        {
+            var order = new List<string>((ReadSetting("Order") ?? "").Split('\n'));
+            var res = new List<BtDevice>(list);
+            res.Sort((a, b) =>
+            {
+                int ia = order.IndexOf(a.Name), ib = order.IndexOf(b.Name);
+                if (ia < 0) ia = int.MaxValue - list.Count + list.IndexOf(a);
+                if (ib < 0) ib = int.MaxValue - list.Count + list.IndexOf(b);
+                return ia.CompareTo(ib);
+            });
+            return res;
+        }
+
+        void MoveDevice(int index, int delta)
+        {
+            int j = index + delta;
+            if (j < 0 || j >= devices.Count) return;
+            var tmp = devices[index]; devices[index] = devices[j]; devices[j] = tmp;
+            var names = new List<string>();
+            foreach (var d in devices) names.Add(d.Name);
+            WriteSetting("Order", string.Join("\n", names.ToArray()));
+            lastSignature = "";
+            Refresh_();
         }
 
         void BuildTrayMenu()
         {
             var m = tray.ContextMenuStrip; m.Items.Clear();
-            try { devices = BtAudio.List(); } catch { }
+            try { devices = Sorted(BtAudio.List()); } catch { }
             if (devices.Count == 0) m.Items.Add(new ToolStripMenuItem("Aucun appareil Bluetooth audio") { Enabled = false });
             foreach (var d in devices)
             {
@@ -331,6 +367,7 @@ namespace BtSwitch
         void Toggle(BtDevice d)
         {
             bool connect = !d.Connected;
+            holdUntil = DateTime.Now.AddSeconds(2.4);
             favorite = d.Name; WriteSetting("Favorite", favorite);
             status.Text = connect ? "Connexion de " + d.Name + " au PC…" : "Libération de " + d.Name + " pour le téléphone…";
             Cursor = Cursors.WaitCursor;
@@ -353,7 +390,7 @@ namespace BtSwitch
 
         void ToggleFavorite()
         {
-            try { devices = BtAudio.List(); } catch { return; }
+            try { devices = Sorted(BtAudio.List()); } catch { return; }
             BtDevice target = null;
             foreach (var d in devices) if (favorite != null && d.Name == favorite) target = d;
             if (target == null && devices.Count > 0) target = devices[0];
@@ -404,6 +441,135 @@ namespace BtSwitch
                 }
             }
             catch { }
+        }
+    }
+
+    // ---------------- Controles dessines ----------------
+    static class Shapes
+    {
+        public static System.Drawing.Drawing2D.GraphicsPath Pill(RectangleF r)
+        {
+            var p = new System.Drawing.Drawing2D.GraphicsPath();
+            float d = r.Height;
+            p.AddArc(r.X, r.Y, d, d, 90, 180);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 180);
+            p.CloseFigure();
+            return p;
+        }
+        public static Color Lerp(Color a, Color b, float t)
+        {
+            return Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+        }
+    }
+
+    // Interrupteur "PC | Tel." : la pastille indique ou va le son
+    class ToggleSwitch : Control
+    {
+        public bool OnPhone { get; private set; }
+        public event EventHandler Toggled;
+        float pos;
+        bool hover;
+        readonly Timer anim = new Timer { Interval = 15 };
+        readonly Color pc, phone, muted;
+
+        public ToggleSwitch(bool onPhone, Color pc, Color phone, Color muted)
+        {
+            this.pc = pc; this.phone = phone; this.muted = muted;
+            OnPhone = onPhone; pos = onPhone ? 1f : 0f;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
+                     ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+            TabStop = true; Cursor = Cursors.Hand;
+            Font = new Font("Segoe UI Semibold", 9f);
+            AccessibleRole = AccessibleRole.CheckButton;
+            anim.Tick += (s, e) =>
+            {
+                float target = OnPhone ? 1f : 0f;
+                pos += (target - pos) * 0.3f;
+                if (Math.Abs(target - pos) < 0.01f) { pos = target; anim.Stop(); }
+                Invalidate();
+            };
+        }
+
+        void Flip()
+        {
+            OnPhone = !OnPhone;
+            if (SystemInformation.UIEffectsEnabled) anim.Start(); else { pos = OnPhone ? 1f : 0f; Invalidate(); }
+            if (Toggled != null) Toggled(this, EventArgs.Empty);
+        }
+
+        protected override void OnClick(EventArgs e) { base.OnClick(e); Focus(); Flip(); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) Flip();
+            else if (e.KeyCode == Keys.Left && OnPhone) Flip();
+            else if (e.KeyCode == Keys.Right && !OnPhone) Flip();
+        }
+        protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || base.IsInputKey(k); }
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            var track = new RectangleF(1, 1, Width - 3, Height - 3);
+            using (var path = Shapes.Pill(track))
+            using (var b = new SolidBrush(hover ? Color.FromArgb(62, 62, 74) : Color.FromArgb(52, 52, 62)))
+                g.FillPath(b, path);
+
+            float half = (track.Width - 6) / 2f;
+            var thumb = new RectangleF(track.X + 3 + pos * half, track.Y + 3, half, track.Height - 6);
+            using (var path = Shapes.Pill(thumb))
+            using (var b = new SolidBrush(Shapes.Lerp(pc, phone, pos)))
+                g.FillPath(b, path);
+
+            var left = new RectangleF(track.X + 3, track.Y, half, track.Height);
+            var right = new RectangleF(track.X + 3 + half, track.Y, half, track.Height);
+            var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            using (var on = new SolidBrush(Color.White))
+            using (var off = new SolidBrush(muted))
+            {
+                g.DrawString("PC", Font, pos < 0.5f ? on : off, left, sf);
+                g.DrawString("Tél.", Font, pos >= 0.5f ? on : off, right, sf);
+            }
+            if (Focused)
+                using (var path = Shapes.Pill(new RectangleF(0.5f, 0.5f, Width - 2, Height - 2)))
+                using (var p = new Pen(Color.White, 1.5f))
+                    g.DrawPath(p, path);
+        }
+    }
+
+    // Petite fleche pour reordonner
+    class ArrowButton : Control
+    {
+        readonly bool up; bool hover;
+        public ArrowButton(bool up)
+        {
+            this.up = up;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.Selectable, true);
+            TabStop = true; Cursor = Cursors.Hand; AccessibleRole = AccessibleRole.PushButton;
+        }
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnEnabledChanged(EventArgs e) { Cursor = Enabled ? Cursors.Hand : Cursors.Default; Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnKeyDown(KeyEventArgs e) { base.OnKeyDown(e); if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) OnClick(EventArgs.Empty); }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            if (Enabled && (hover || Focused))
+                using (var b = new SolidBrush(Color.FromArgb(60, 60, 72))) g.FillEllipse(b, 0, 0, Width - 1, Height - 1);
+            float cx = Width / 2f, cy = Height / 2f;
+            var pts = up
+                ? new[] { new PointF(cx - 5, cy + 2.5f), new PointF(cx, cy - 3), new PointF(cx + 5, cy + 2.5f) }
+                : new[] { new PointF(cx - 5, cy - 2.5f), new PointF(cx, cy + 3), new PointF(cx + 5, cy - 2.5f) };
+            var col = !Enabled ? Color.FromArgb(70, 70, 82) : hover ? Color.White : Color.FromArgb(160, 160, 175);
+            using (var p = new Pen(col, 2f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round, LineJoin = System.Drawing.Drawing2D.LineJoin.Round })
+                g.DrawLines(p, pts);
         }
     }
 

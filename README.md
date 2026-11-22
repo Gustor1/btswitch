@@ -7,8 +7,8 @@
 D'habitude, pour passer tes écouteurs du PC au téléphone, il faut aller dans les paramètres Bluetooth, déconnecter, puis reconnecter dans l'autre sens. BtSwitch fait ça en un clic.
 
 - Liste les appareils audio Bluetooth appairés et indique où va le son.
-- **Vers le tél.** : le PC lâche les écouteurs, le téléphone peut les reprendre.
-- **Vers le PC** : le PC les reconnecte.
+- Un interrupteur **PC | Tél.** par appareil : côté **Tél.**, le PC lâche les écouteurs et le téléphone peut les reprendre ; côté **PC**, le PC les reconnecte. Utilisable au clavier (Tab, puis Espace ou ← →).
+- Flèches ⌃ / ⌄ pour ranger les appareils dans l'ordre de ton choix (ordre retenu, aussi dans le menu de l'icône).
 - Icône dans la zone de notification : bleue quand le son est sur le PC, verte quand il est libre.
 - Raccourci global **Ctrl+Alt+B** pour basculer le dernier appareil utilisé.
 - Option « Lancer au démarrage de Windows ».
@@ -37,7 +37,7 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32ico
 
 BtSwitch utilise la propriété Kernel Streaming `KSPROPSETID_BtAudio` (`ONESHOT_DISCONNECT` / `ONESHOT_RECONNECT`) exposée par la pile audio Bluetooth de Windows, la même que Windows utilise en interne pour les boutons « Connecter / Déconnecter » des appareils audio. L'appairage n'est jamais modifié.
 
-Les réglages (dernier appareil utilisé) sont stockés dans `HKCU\Software\BtSwitch`, et le lancement au démarrage dans `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+Les réglages (dernier appareil utilisé, ordre des appareils) sont stockés dans `HKCU\Software\BtSwitch`, et le lancement au démarrage dans `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## Limites
 
